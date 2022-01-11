@@ -2,6 +2,7 @@
 from bs4 import BeautifulSoup
 import urllib.request
 import urllib.parse
+import urllib.error
 import numpy as np
 import cv2
 from PIL import ImageFont, ImageDraw, Image
@@ -27,7 +28,12 @@ class glyphNode:
         self.grid_position = position
         self.glyph = glyph
         self.pinyin = pinyin.get(glyph)
-        self.english = pinyin.cedict.translate_word(glyph)
+        english = pinyin.cedict.translate_word(glyph)
+        if english is not None:
+            # print(english[0])
+            self.english = english[0]
+        else:
+            self.english = ""
         self.is_explored = False
 
         self.children_nodes = []
@@ -53,11 +59,16 @@ class glyphNode:
 
         rected_im = cv2.rectangle(image, [image_x1, image_y1], [image_x2, image_y2], (255,255,255), thickness=-1)
 
+        cv2.putText(rected_im, self.english, (image_x1 + render_scale, int(image_y1 + render_scale/2)), cv2.FONT_HERSHEY_PLAIN, 2, (255,255,255), 1, cv2.LINE_AA)
+        # cv2.putText(img, "--- by Silencer", (200, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (b, g, r), 1, cv2.LINE_AA)
+
         img_pil = Image.fromarray(rected_im)
         draw = ImageDraw.Draw(img_pil)
 
         fontpath = "./simsun.ttc"
         font = ImageFont.truetype(fontpath, render_scale-4)
+
+
 
         b, g, r = 0, 0, 0
         draw.text((int(image_x1), int(image_y1)), self.glyph, font=font, fill=(b,g,r))
@@ -83,7 +94,6 @@ class glyphNode:
                 print("too many children!")
 
 
-
 def get_components_from_glyph(glyph):
     # read wikitionary
 
@@ -92,7 +102,15 @@ def get_components_from_glyph(glyph):
 
     target_url = "https://en.wiktionary.org/wiki/" + urllib.parse.quote(glyph)
 
-    web_bytes = urllib.request.urlopen(target_url)
+    # web_bytes = urllib.request.urlopen(target_url)
+    # web_bytes = urllib.request.urlopen(target_url)
+    web_bytes = None
+    try:
+        web_bytes = urllib.request.urlopen(target_url)
+        # break
+    except urllib.error.HTTPError as exception:
+
+        print("Oops!  That was no valid number.  Try again...")
 
     if web_bytes != None:
         english_was_changed = False
@@ -128,7 +146,6 @@ def get_components_from_glyph(glyph):
             # print(all_hani)
             for link in all_links:
                 a_entry = link.findChildren("a")
-                print(a_entry)
                 if a_entry is not None and len(a_entry) >= 1:
                     chinese_char = a_entry[0].getText()
                     all_glyphs.append(chinese_char)
@@ -147,20 +164,26 @@ def get_components_from_glyph(glyph):
             #     hani_glyphs.append(chinese_char)
             # for hani_glyph in hani_glyphs:
             if len(hani_glyphs) > 0:
+                if compund_type == "Variant":
+                    derivative_glyphs = [hani_glyphs[0]]
                 if compund_type == "Simplified":
-                    print(hani_glyphs)
+                    # print(hani_glyphs)
                     derivative_glyphs = [hani_glyphs[0]]
                 elif hani_glyphs[0] == "形聲": #phonosemantic
-                    derivative_glyphs = hani_glyphs[1::]
+                    derivative_glyphs = hani_glyphs[1:3]
                 elif hani_glyphs[0] == "象形": #pictogram
+
                     if len(hani_glyphs) >= 2:
-                        derivative_glyphs = hani_glyphs[1::]
+                        if hani_glyphs[1] == "女":
+                            derivative_glyphs = []
+                        else:
+                            derivative_glyphs = hani_glyphs[1:3]
                         # derivative_glyphs = hani_glyphs[1::]
                     else:
                         derivative_glyphs = []
                 elif hani_glyphs[0] == "會意": #ideogrammic
-                    derivative_glyphs = hani_glyphs[1::]
-                    print(derivative_glyphs)
+                    derivative_glyphs = hani_glyphs[1:3]
+                    # print(derivative_glyphs)
             # however there is a leftover possibility that the "simplified" infromation is in the table
         # print(relevant_entries)
         return derivation_type, derivative_glyphs
@@ -221,7 +244,7 @@ class glyphTree:
 
     def render_tree(self):
         # produce a drawing of the tree of glyphs
-        graph_canvas = np.zeros((400, 700, 3), np.uint8)
+        graph_canvas = np.zeros((700, 700, 3), np.uint8)
         # graph_canvas = np.zeros((500, 500, 3))
 
         tree_list = self.tree_to_list()
@@ -230,13 +253,7 @@ class glyphTree:
         return graph_canvas
 
 def main():
-    # fp = urllib.request.urlopen(target_url)
-    # mybytes = fp.read()
-    #
-    # wiki_html = mybytes.decode("utf8")
-    # fp.close()
-    #
-    # soup = BeautifulSoup(wiki_html, 'html.parser')
+
 
     # fontpath = "./simsun.ttc" # <== 这里是宋体路径
     fontpath = "./simsun.ttc"
@@ -245,7 +262,7 @@ def main():
     # cv2.putText(img,  "--- by Silencer", (200,150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (b,g,r), 1, cv2.LINE_AA)
     translator = Translator()
 
-    english_text = "week"
+    english_text = "on time"
     english_was_changed = "true"
 
     while True:
@@ -263,7 +280,11 @@ def main():
 
             # translated_text =
 
-            character_of_interest = translated_text[0]
+            if len(translated_text) == 1:
+                character_of_interest = translated_text[0]
+            elif len(translated_text) == 2:
+                character_of_interest = translated_text[1]
+            # character_of_interest = translated_text[0]
 
             glyphs_tree = glyphTree(character_of_interest)
             # glyphs_tree.fill_tree()
