@@ -26,6 +26,7 @@ class Point:
 class glyphNode:
     def __init__(self, glyph, offset, parent):
         self.grid_position = self.get_position(offset, parent)
+        self.offset = offset
         self.glyph = glyph
         self.pinyin = pinyin.get(glyph, format="numerical")
         english = pinyin.cedict.translate_word(glyph)
@@ -45,6 +46,9 @@ class glyphNode:
             return Point(offset.x, offset.y)
         return Point(parent.grid_position.x + offset.x, parent.grid_position.y + offset.y)
 
+    def recalc_position(self):
+        if self.parent_node is not None:
+            self.grid_position = Point(self.parent_node.grid_position.x + self.offset.x, self.parent_node.grid_position.y + self.offset.y)
 
     def add_child_node(self, new_node):
         self.children_nodes.append(new_node)
@@ -60,23 +64,17 @@ class glyphNode:
 
         # print("my glyph is: "+self.glyph)
 
-        rect_x1 = int(self.grid_position.x * render_scale + IMAGE_WIDTH / 2)
-        rect_y1 = int((self.grid_position.y * render_scale) + IMAGE_WIDTH / 10)
+        rect_x1 = int((self.grid_position.x) * render_scale + IMAGE_WIDTH / 2)
+        rect_y1 = int(((self.grid_position.y) * render_scale) + IMAGE_WIDTH / 10)
+        # if self.parent_node is not None:
+        #     rect_x1 = int((self.parent_node.grid_position.x + self.grid_position.x) * render_scale + IMAGE_WIDTH / 2)
+        #     rect_y1 = int(((self.parent_node.grid_position.y + self.grid_position.y) * render_scale) + IMAGE_WIDTH / 10)
         rect_x2 = int(rect_x1 + render_scale * block_size)
         rect_y2 = int(rect_y1 + render_scale * block_size)
 
         rected_im = cv2.rectangle(image, [rect_x1, rect_y1], [rect_x2, rect_y2], (255,255,255), thickness=-1)
 
         derivation_label = ""
-        # set derivation label
-        # if self.children_type == "Phono-Semantic_Compound":
-        #     derivation_label = "Phono-Semantic compound"
-        # elif self.children_type == "Ideogrammic_Compound":
-        #     derivation_label = "Ideogrammic compound"
-        # elif self.children_type == "Pictogram":
-        #     derivation_label = "Pictogram"
-        # elif self.children_type == "Simplified":
-        #     derivation_label = "Simplified"
         derivation_label = self.children_type
 
         # draw branches to children
@@ -94,6 +92,9 @@ class glyphNode:
                 child_x_1 = int(child_node.grid_position.x * render_scale + IMAGE_WIDTH / 2)
                 child_y_1 = int(child_node.grid_position.y * render_scale + IMAGE_WIDTH / 10)
 
+                # if self.parent_node is not None:
+                #     child_x_1 = int(child_node.grid_position.x * render_scale + IMAGE_WIDTH / 2)
+                #     child_y_1 = int(child_node.grid_position.y * render_scale + IMAGE_WIDTH / 10)
                 # individual label
                 rected_im = cv2.putText(rected_im, individual_label, (child_x_1, child_y_1-20), cv2.FONT_HERSHEY_PLAIN, .7, (255,255,255), 1, cv2.LINE_AA)
 
@@ -135,6 +136,15 @@ class glyphNode:
             else:
                 print("too many children!")
 
+    def recalc_child_pos(self):
+        num_children = len(self.children_nodes)
+        if num_children == 1:
+            self.children_nodes[0].recalc_position()
+        for child_index in range(len(self.children_nodes)):
+            child = self.children_nodes[child_index]
+
+            child.recalc_position()
+            child.recalc_child_pos()
 
 def get_components_from_glyph(glyph):
     # scrape html
@@ -206,11 +216,14 @@ def get_components_from_glyph(glyph):
                     derivative_glyphs = [hani_glyphs[0]]
                     derivation_type = "Simplified"
                 elif hani_glyphs[0] == "形聲": #phonosemantic
-                    phonetic_index = words_of_text.index("phonetic")
-                    semantic_index = words_of_text.index("semantic")
+                    phonetic_index = 0
+                    if "phonetic" in words_of_text: #words_of_text.contains("phonetic"):
+                        phonetic_index = words_of_text.index("phonetic")
+                    semantic_index = 1
+                    if "semantic" in words_of_text: #words_of_text.contains("semantic"):
+                        semantic_index = words_of_text.index("semantic")
                     if phonetic_index < semantic_index:
                         derivative_glyphs = [hani_glyphs[2], hani_glyphs[1]]
-
                     else:
                         derivative_glyphs = hani_glyphs[1:3]
                     derivation_type = "Phono-Semantic_Compound"
@@ -236,8 +249,6 @@ def get_components_from_glyph(glyph):
 
             # grab the thing after the 'chinese' entry
             chinese_entry = soup.find('span', id="Chinese")
-
-            print(chinese_entry)
 
             simp_table = None
             if chinese_entry is not None:
@@ -322,17 +333,50 @@ class glyphTree:
         tree_list = self.tree_to_list()
         num_nodes = len(tree_list)
         overlaps = 0
+        node_pairs = []
         if num_nodes > 3:
-            for node_1_index in range(num_nodes):
+            for node_1_index in range(num_nodes-1):
                 node_1 = tree_list[node_1_index]
-                for node_2_index in range(node_1_index, num_nodes):
+                for node_2_index in range(node_1_index+1, num_nodes):
                     node_2 = tree_list[node_2_index]
                     p1 = node_1.grid_position
                     p2 = node_2.grid_position
 
                     if p1.x == p2.x and p1.y == p2.y:
                         overlaps += 1
+                        node_pairs.append([node_1,node_2])
         print("there are "+str(overlaps)+" overlap")
+
+        for overlap_index in range(overlaps):
+            n1, n2 = node_pairs[overlap_index]
+
+            offset = 1.5
+
+            #move parents farther apart
+            p1 = n1.parent_node
+            p2 = n2.parent_node
+            if p1.grid_position.x < p2.grid_position.x:
+                # if parent 1 is to the left of parent 2
+                p1pos = p1.grid_position
+                p2pos = p2.grid_position
+
+                # move parent 1 left
+                p1.offset = Point(p1.offset.x-offset, p1.offset.y)
+                # p1.grid_position = Point(p1pos.x-2, p1pos.y)
+                # move parent 2 right
+                p2.offset = Point(p2.offset.x+offset, p2.offset.y)
+                # p2.grid_position = Point(p2pos.x+2, p1pos.y)
+            else:
+                # if parent 2 is to the left of parent 1
+                p1pos = p1.grid_position
+                p2pos = p2.grid_position
+
+                # move parent 1 left
+                p1.offset = Point(p1.offset.x + offset, p1.offset.y)
+                # p1.grid_position = Point(p1pos.x + 2, p1pos.y)
+                # move parent 2 right
+                p2.offset = Point(p2.offset.x - offset, p2.offset.y)
+                # p2.grid_position = Point(p2pos.x - 2, p1pos.y)
 
 def main():
     selected_char_index = 0
@@ -344,7 +388,8 @@ def main():
     # cv2.putText(img,  "--- by Silencer", (200,150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (b,g,r), 1, cv2.LINE_AA)
     translator = Translator()
 
-    english_text = "stationary"
+    english_text = "steel"
+
     # stationary = 静止的
     # campsite
 
@@ -374,14 +419,6 @@ def main():
 
             translated_text = translation.text
 
-            # if len(translated_text) == 1:
-            #     selected_character = translated_text[0]
-            # elif len(translated_text) == 2:
-            #     selected_character = translated_text[1]
-            # else:
-            #     selected_character = translated_text[0]
-
-
             # translated_text = "好"
             # 怕 - phono-semantic
             # 好 - ideogrammic
@@ -392,8 +429,11 @@ def main():
 
             glyphs_tree = glyphTree(selected_character)
 
+            glyphs_tree.check_for_overlap()
+            glyphs_tree.root_node.recalc_child_pos()
             graph_im = glyphs_tree.render_tree()
             cv2.imshow("oth", graph_im)
+
             english_was_changed = False
             do_render = False
 
